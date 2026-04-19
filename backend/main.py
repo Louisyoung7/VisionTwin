@@ -1,34 +1,33 @@
+import json
+import asyncio
+from pathlib import Path
 from fastapi import FastAPI, WebSocket
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from starlette.requests import Request
+from fastapi.websockets import WebSocketDisconnect
 
 app = FastAPI()
 
-connections = set()
-
-@app.get("/")
-async def get_index():
-    with open("templates/index.html", "r", encoding="utf-8") as f:
-        return HTMLResponse(content=f.read())
-
-@app.websocket("/ws")
+@app.websocket("/ws/yolo")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    connections.add(websocket)
     try:
+        video_path = await websocket.receive_text()
+        print(f"Received video path: {video_path}")
+        
+        # 读取 mock 数据（后续替换为 YOLO 调用）
+        mock_file = Path("mock_data/frame_001.json")
+        if not mock_file.exists():
+            await websocket.send_json({"error": "Mock data file not found"})
+            return
+        
+        with open(mock_file) as f:
+            data = json.load(f)
+        
+        # 持续发送同一帧（模拟实时流）
         while True:
-            data = await websocket.receive_text()
-            await websocket.send_text(f"服务端收到: {data}")
-            for connection in connections:
-                if connection != websocket:
-                    await connection.send_text(f"广播: {data}")
+            await websocket.send_json(data)
+            await asyncio.sleep(0.1)  # 10fps
+    except WebSocketDisconnect:
+        print("WebSocket disconnected")
     except Exception as e:
-        print(f"连接错误: {e}")
-    finally:
-        connections.remove(websocket)
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+        print(f"Error: {e}")
+        await websocket.close(code=1011, reason=str(e))

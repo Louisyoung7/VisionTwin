@@ -1,0 +1,24 @@
+{
+  "frame_id": 1,
+  "timestamp": 1717020866.123,
+  "objects": [
+    {
+      "class_name": "person",
+      "bbox": [
+        0.1,
+        0.2,
+        0.3,
+        0.4
+      ]
+    },
+    {
+      "class_name": "car",
+      "bbox": [
+        0.5,
+        0.6,
+        0.8,
+        0.9
+      ]
+    }
+  ]
+}
