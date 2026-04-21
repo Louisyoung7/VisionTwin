@@ -1,5 +1,6 @@
 // 从 node_modules 导入 Three.js（享受类型提示和 Tree-shaking）
 import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 // ========== 1. 场景初始化 ==========
 const scene = new THREE.Scene();
@@ -12,6 +13,13 @@ camera.lookAt(0, 0, 0);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
+
+// 添加轨道控制器
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; // 启用阻尼效果
+controls.dampingFactor = 0.05; // 阻尼系数
+controls.enableZoom = true; // 启用缩放
+controls.enablePan = true; // 启用平移
 
 // 添加地面网格
 const gridHelper = new THREE.GridHelper(40, 40, 0xffffff, 0x444444);
@@ -70,6 +78,9 @@ function updateScene(objects) {
 // ========== 4. 动画循环 ==========
 function animate() {
   requestAnimationFrame(animate);
+  
+  // 更新控制器
+  controls.update();
   
   // 每 200ms 更新数据
   if (Date.now() % 200 < 16) {

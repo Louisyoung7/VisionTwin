@@ -1,26 +1,28 @@
-import asyncio
-from pathlib import Path
 from fastapi import FastAPI, WebSocket
-from fastapi.websockets import WebSocketDisconnect
-
-from services.mock_yolo import MockYOLO
+import asyncio
+import random
 
 app = FastAPI()
 
-@app.websocket("/ws/yolo")
-async def websocket_endpoint(websocket: WebSocket):
+@app.websocket("/ws")
+async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
-    try:
-        video_path = await websocket.receive_text()
-        print(f"Received video path: {video_path}")
-
-        mock_yolo = MockYOLO()
-        
-        async for frame_data in mock_yolo.process_video(video_path):
-            await websocket.send_json(frame_data)
-            
-    except WebSocketDisconnect:
-        print("WebSocket disconnected")
-    except Exception as e:
-        print(f"Error: {e}")
-        await websocket.close(code=1011, reason=str(e))
+    await websocket.receive_text()  # 接收任意启动信号
+    
+    while True:
+        # 生成 Mock 3D 位置数据（模拟 YOLO 输出）
+        data = {
+            "objects": [
+                {
+                    "id": 1,
+                    "type": "person",
+                    "position": [  # 随机 3D 坐标 (x, y, z)
+                        round(random.uniform(-5, 5), 2),
+                        0.0,  # 地面高度
+                        round(random.uniform(-5, 5), 2)
+                    ]
+                }
+            ]
+        }
+        await websocket.send_json(data)
+        await asyncio.sleep(0.1)  # 10fps
