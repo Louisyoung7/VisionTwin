@@ -3,23 +3,28 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 // ========== 1. 场景初始化 ==========
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0a0a0a);
+const scene = new THREE.Scene();  // 创建 Three.js 场景对象
+scene.background = new THREE.Color(0x0a0a0a); // 设置场景背景为深灰色
 
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-camera.position.set(0, 20, 20);
-camera.lookAt(0, 0, 0);
+const camera = new THREE.PerspectiveCamera(
+  75,                                    // 视野角度 (FOV)
+  window.innerWidth / window.innerHeight, // 宽高比
+  0.1,                                   // 近裁切面
+  1000                                   // 远裁切面
+);
+camera.position.set(0, 20, 20);  // 相机位置 (x, y, z)
+camera.lookAt(0, 0, 0);           // 相机朝向原点
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-document.body.appendChild(renderer.domElement);
+const renderer = new THREE.WebGLRenderer({ antialias: true }); // 创建 WebGL 渲染器，启用抗锯齿
+renderer.setSize(window.innerWidth, window.innerHeight); // 全屏尺寸渲染
+document.body.appendChild(renderer.domElement); // 将 Canvas 元素添加到 HTML body
 
-// 添加轨道控制器
+// 添加轨道控制器，实现鼠标交互控制视角
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.05;
-controls.enableZoom = true;
-controls.enablePan = true;
+controls.enableDamping = true;      // 启用阻尼（惯性效果）
+controls.dampingFactor = 0.05;      // 阻尼系数
+controls.enableZoom = true;         // 启用缩放
+controls.enablePan = true;           // 启用平移
 controls.maxPolarAngle = Math.PI / 2 - 0.05; // 限制视角不能低于地面
 
 // 添加地面（使用平面图纹理）
@@ -29,18 +34,18 @@ const floorTexture = textureLoader.load('/floor-plan.png');
 floorTexture.wrapS = THREE.RepeatWrapping;
 floorTexture.wrapT = THREE.RepeatWrapping;
 
-const floorGeometry = new THREE.PlaneGeometry(30, 30);
+const floorGeometry = new THREE.PlaneGeometry(30, 30); // 创建 30×30 单位的平面几何体
 const floorMaterial = new THREE.MeshBasicMaterial({ 
   map: floorTexture,
   side: THREE.DoubleSide
-});
+}); // 使用 MeshBasicMaterial 应用纹理
 
 const floor = new THREE.Mesh(floorGeometry, floorMaterial);
-floor.rotation.x = -Math.PI / 2; // 旋转使其水平
+floor.rotation.x = -Math.PI / 2; // 绕 X 轴旋转 -90° 使平面水平放置
 floor.position.y = 0;
 scene.add(floor);
 
-// 添加边缘线框（可选，增强视觉效果）
+// 添加边缘线框，增强视觉效果
 const edgesGeometry = new THREE.EdgesGeometry(floorGeometry);
 const edgesMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, opacity: 0.3, transparent: true });
 const edges = new THREE.LineSegments(edgesGeometry, edgesMaterial);
@@ -48,48 +53,53 @@ edges.rotation.x = -Math.PI / 2;
 edges.position.y = 0.01; // 略高于地面避免 z-fighting
 scene.add(edges);
 
-// ========== 2. Mock 数据生成器 ==========
-function generateMockFrame() {
-  const objects = [];
-  const count = Math.floor(Math.random() * 5);
-  
-  for (let i = 0; i < count; i++) {
-    objects.push({
-      class_name: ['person', 'car'][Math.floor(Math.random() * 2)],
-      bbox: [
-        Math.random() * 0.8,
-        Math.random() * 0.8,
-        Math.random() * 0.2 + 0.8,
-        Math.random() * 0.2 + 0.8
-      ]
-    });
-  }
-  return { frame_id: Date.now(), objects };
+// ========== 2. WebSocket 连接 ==========
+let wsData = { objects: [] };
+
+function connectWebSocket() {
+  const ws = new WebSocket('ws://127.0.0.1:8000/ws');
+
+  ws.onopen = () => {
+    console.log('WebSocket connected');
+    ws.send('start');  // 发送启动信号
+  };
+
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    wsData = data;
+  };
+
+  ws.onerror = (err) => {
+    console.error('WebSocket error:', err);
+  };
+
+  ws.onclose = () => {
+    console.log('WebSocket closed, reconnecting...');
+    setTimeout(connectWebSocket, 2000);
+  };
 }
+connectWebSocket();
 
 // ========== 3. 3D 渲染逻辑 ==========
-let markers = [];
+let markers = []; // markers 数组存储当前场景中的所有 3D 标记物对象
 
 function updateScene(objects) {
+  // 1. 清除旧标记
   markers.forEach(m => scene.remove(m));
   markers = [];
   
+  // 2. 创建新标记
   objects.forEach(obj => {
-    const geometry = obj.class_name === 'person'
-      ? new THREE.CylinderGeometry(0.3, 0.3, 1.8)
-      : new THREE.BoxGeometry(1, 0.5, 2);
-      
-    const material = new THREE.MeshBasicMaterial({ 
-      color: obj.class_name === 'person' ? 0x00ff00 : 0x0088ff 
-    });
-    
+    const geometry = new THREE.BoxGeometry(1, 0.5, 2);
+    const material = new THREE.MeshBasicMaterial({ color: 0x0088ff });
+
     const marker = new THREE.Mesh(geometry, material);
     marker.position.set(
-      (Math.random() - 0.5) * 25, 
-      obj.class_name === 'person' ? 0.9 : 0.25,
-      (Math.random() - 0.5) * 25  
+      obj.position[0],
+      obj.position[1] + 0.25,
+      obj.position[2]
     );
-    
+
     scene.add(marker);
     markers.push(marker);
   });
@@ -97,21 +107,21 @@ function updateScene(objects) {
 
 // ========== 4. 动画循环 ==========
 function animate() {
-  requestAnimationFrame(animate);
+  requestAnimationFrame(animate);  // 循环调用
   
-  controls.update();
+  controls.update();  // 更新控制器状态
   
   if (Date.now() % 200 < 16) {
-    const mockData = generateMockFrame();
-    updateScene(mockData.objects);
-    document.getElementById('info').textContent = 
-      `Objects: ${mockData.objects.length}`;
+    updateScene(wsData.objects);
+    document.getElementById('info').textContent =
+      `Objects: ${wsData.objects.length}`;
   }
   
-  renderer.render(scene, camera);
+  renderer.render(scene, camera);  // 渲染场景
 }
 animate();
 
+// 窗口自适应调整
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();

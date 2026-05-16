@@ -1,3 +1,5 @@
+# 用于测试 WebSocket 连通性
+
 import websocket
 import json
 
@@ -17,7 +19,7 @@ def on_open(ws):
 
 if __name__ == "__main__":
     # WebSocket 连接地址
-    ws_url = "ws://127.0.0.1:8000/ws/yolo"
+    ws_url = "ws://127.0.0.1:8000/ws"
     websocket.enableTrace(True)
     
     ws = websocket.WebSocketApp(
