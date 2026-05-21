@@ -53,7 +53,24 @@ edges.rotation.x = -Math.PI / 2;
 edges.position.y = 0.01; // 略高于地面避免 z-fighting
 scene.add(edges);
 
-// ========== 2. WebSocket 连接 ==========
+// ========== 2. 获取车辆元数据 ==========
+let vehicleMetadata = {};
+
+async function fetchVehicleMetadata() {
+  try {
+    const res = await fetch('http://127.0.0.1:8000/api/vehicles');
+    const data = await res.json();
+    vehicleMetadata = {};
+    data.vehicles.forEach(v => {
+      vehicleMetadata[v.id] = v.plate;
+    });
+  } catch (err) {
+    console.error('Failed to fetch vehicle metadata:', err);
+  }
+}
+fetchVehicleMetadata();
+
+// ========== 3. WebSocket 连接 ==========
 let wsData = { objects: [] };
 
 function connectWebSocket() {
@@ -80,15 +97,42 @@ function connectWebSocket() {
 }
 connectWebSocket();
 
-// ========== 3. 3D 渲染逻辑 ==========
-let markers = []; // markers 数组存储当前场景中的所有 3D 标记物对象
+// ========== 4. 创建标签 Sprite ==========
+function createLabel(text) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = 256;
+  canvas.height = 64;
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = 'white';
+  ctx.font = 'bold 32px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
+  const sprite = new THREE.Sprite(spriteMaterial);
+  sprite.scale.set(2, 0.5, 1);
+
+  return sprite;
+}
+
+// ========== 5. 3D 渲染逻辑 ==========
+let markers = [];
+let labels = [];
 
 function updateScene(objects) {
-  // 1. 清除旧标记
+  // 清除旧标记和标签
   markers.forEach(m => scene.remove(m));
+  labels.forEach(l => scene.remove(l));
   markers = [];
-  
-  // 2. 创建新标记
+  labels = [];
+
+  // 创建新标记
   objects.forEach(obj => {
     const geometry = new THREE.BoxGeometry(1, 0.5, 2);
     const material = new THREE.MeshBasicMaterial({ color: 0x0088ff });
@@ -102,10 +146,22 @@ function updateScene(objects) {
 
     scene.add(marker);
     markers.push(marker);
+
+    // 创建车牌标签
+    const plate = vehicleMetadata[obj.id] || `ID:${obj.id}`;
+    const label = createLabel(plate);
+    label.position.set(
+      obj.position[0],
+      obj.position[1] + 1.2,
+      obj.position[2]
+    );
+
+    scene.add(label);
+    labels.push(label);
   });
 }
 
-// ========== 4. 动画循环 ==========
+// ========== 6. 动画循环 ==========
 function animate() {
   requestAnimationFrame(animate);  // 循环调用
   

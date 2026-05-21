@@ -1,9 +1,41 @@
 from fastapi import FastAPI, WebSocket
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 
 from data_generator import vehicles
+from database import get_connection
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/api/vehicles")
+async def get_vehicles():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, plate FROM vehicles")
+    rows = cursor.fetchall()
+    return JSONResponse({"vehicles": [{"id": r[0], "plate": r[1]} for r in rows]})
+
+
+@app.get("/api/vehicles/{vehicle_id}")
+async def get_vehicle(vehicle_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, plate FROM vehicles WHERE id = ?", (vehicle_id,))
+    row = cursor.fetchone()
+    if row:
+        return JSONResponse({"id": row[0], "plate": row[1]})
+    return JSONResponse({"error": "Vehicle not found"}, status_code=404)
+
 
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
