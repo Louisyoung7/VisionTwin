@@ -5,11 +5,42 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Digital Twin</title>
-  <!-- Vite 会自动注入 main.js -->
 </head>
 
 <body>
-  <div id="info">Loading...</div>
+  <div id="app">
+    <header>
+      <h1>Digital Twin</h1>
+    </header>
+
+    <main class="dashboard">
+      <section class="viewer-section">
+        <div id="viewer-container"></div>
+        <div id="info"></div>
+      </section>
+
+      <aside class="data-panel">
+        <div class="panel-header">
+          <h2>甲烷气体监测</h2>
+          <span class="status-indicator online"></span>
+        </div>
+
+        <div id="methane-data" class="sensor-list">
+          <div class="loading">加载中...</div>
+        </div>
+
+        <div class="panel-footer">
+          <button id="refresh-btn" class="refresh-btn">
+            <svg viewBox="0 0 24 24" width="16" height="16">
+              <path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+            </svg>
+            刷新数据
+          </button>
+        </div>
+      </aside>
+    </main>
+  </div>
+
   <script type="module" src="src/main.js"></script>
 </body>
 
