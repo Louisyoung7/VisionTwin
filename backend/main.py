@@ -1,11 +1,12 @@
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.websockets import WebSocketDisconnect
 import asyncio
 
-from data_generator import vehicles
-from database import get_connection
-from methane_generator import methane_sensors
+from vehicle_simulation import vehicles
+from db import get_connection
+from methane_simulation import methane_sensors, update_all_sensors, get_alerts
 
 app = FastAPI()
 
@@ -24,6 +25,7 @@ async def get_vehicles():
     cursor = conn.cursor()
     cursor.execute("SELECT id, plate FROM vehicles")
     rows = cursor.fetchall()
+    conn.close()
     return JSONResponse({"vehicles": [{"id": r[0], "plate": r[1]} for r in rows]})
 
 
@@ -33,27 +35,28 @@ async def get_vehicle(vehicle_id: int):
     cursor = conn.cursor()
     cursor.execute("SELECT id, plate FROM vehicles WHERE id = ?", (vehicle_id,))
     row = cursor.fetchone()
+    conn.close()
     if row:
         return JSONResponse({"id": row[0], "plate": row[1]})
     return JSONResponse({"error": "Vehicle not found"}, status_code=404)
 
 
 @app.get("/api/methane")
-async def get_methane_sensors():
+async def get_methane():
     return JSONResponse({
-        "sensors": [sensor.get_data() for sensor in methane_sensors]
+        "methane": [sensor.get_data() for sensor in methane_sensors]
     })
 
 
 @app.get("/api/methane/{sensor_id}")
-async def get_methane_sensor(sensor_id: int):
+async def get_methane(sensor_id: int):
     if sensor_id < 0 or sensor_id >= len(methane_sensors):
         return JSONResponse({"error": "Sensor not found"}, status_code=404)
     return JSONResponse(methane_sensors[sensor_id].get_data())
 
 
 @app.post("/api/methane/{sensor_id}/update")
-async def update_methane_sensor(sensor_id: int):
+async def update_methane(sensor_id: int):
     if sensor_id < 0 or sensor_id >= len(methane_sensors):
         return JSONResponse({"error": "Sensor not found"}, status_code=404)
     methane_sensors[sensor_id].update()
@@ -63,24 +66,30 @@ async def update_methane_sensor(sensor_id: int):
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
-    await websocket.receive_text()
 
     while True:
-        for v in vehicles:
-            v.update()
+        try:
+            for v in vehicles:
+                v.update()
 
-        data = {
-            "objects": [
-                {
-                    "id": v.id,
-                    "type": "vehicle",
-                    "position": [round(v.x, 2), 0.0, round(v.z, 2)]
-                }
-                for v in vehicles
-            ]
-        }
-        await websocket.send_json(data)
-        await asyncio.sleep(0.1)
+            new_alerts = update_all_sensors()
+
+            data = {
+                "objects": [
+                    {
+                        "id": v.id,
+                        "type": "vehicle",
+                        "position": [round(v.x, 2), 0.0, round(v.z, 2)]
+                    }
+                    for v in vehicles
+                ],
+                "alerts": get_alerts(),
+                "methane": [s.get_data() for s in methane_sensors]
+            }
+            await websocket.send_json(data)
+            await asyncio.sleep(0.1)
+        except WebSocketDisconnect:
+            break
 
 
 if __name__ == "__main__":
