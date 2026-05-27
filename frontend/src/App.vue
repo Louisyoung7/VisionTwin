@@ -76,7 +76,7 @@ function connectWebSocket() {
   ws = new WebSocket('ws://127.0.0.1:8000/ws')
 
   ws.onopen = () => {
-    console.log('WebSocket 已连接')
+    console.log('WebSocket 已连接（车辆实时推送）')
     isOnline.value = true
     reconnectAttempts = 0
   }
@@ -84,12 +84,10 @@ function connectWebSocket() {
   ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data)
-      vehicles.value = data.objects.map(obj => ({
-        id: obj.id,
-        position: obj.position,
-        type: obj.type || 'vehicle'
-      }))
-      vehicleCount.value = vehicles.value.length
+      if (data.vehicles) {
+        vehicles.value = data.vehicles
+        vehicleCount.value = vehicles.value.length
+      }
     } catch (error) {
       console.error('解析消息失败:', error)
     }
@@ -103,10 +101,7 @@ function connectWebSocket() {
     isOnline.value = false
     reconnectAttempts++
     if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-      console.log(`WebSocket 连接关闭，${reconnectAttempts}秒后重连...（${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}）`)
       setTimeout(connectWebSocket, reconnectAttempts * 3000)
-    } else {
-      console.log('WebSocket 重连次数已达上限，停止重连')
     }
   }
 }
@@ -151,7 +146,6 @@ function handleSensorClick(sensor) {
 onMounted(() => {
   updateTime()
   timeInterval = setInterval(updateTime, 1000)
-
   connectWebSocket()
   pollData()
   pollInterval = setInterval(pollData, 1000)

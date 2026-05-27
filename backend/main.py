@@ -1,14 +1,10 @@
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.websockets import WebSocketDisconnect
-import asyncio
 import json
 import time
 import threading
 
-from vehicle_simulation import vehicles
-from db import get_connection
 from mqtt_client import MQTTClient
 
 app = FastAPI()
@@ -21,6 +17,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ==================== 车辆数据（来自视觉模块 WebSocket）====================
+vehicles: dict[int, dict] = {}
+vehicles_lock = threading.Lock()
+
 # ==================== 甲烷传感器数据（来自 MQTT）====================
 mqtt_sensors: dict[int, dict] = {}
 mqtt_sensors_lock = threading.Lock()
@@ -32,6 +32,10 @@ ALERT_COOLDOWN = 10
 _last_alert_time: dict[int, float] = {}
 WARNING_THRESHOLD = 40.0
 DANGER_THRESHOLD = 70.0
+
+# ==================== 前端 WebSocket 客户端 ====================
+frontend_clients: set[WebSocket] = set()
+frontend_clients_lock = threading.Lock()
 
 
 def _generate_alert(sensor_id: int, level: str, methane_pct: float, location: list):
@@ -68,7 +72,6 @@ def _on_methane_message(topic: str, payload: bytes):
         methane_pct = data.get("methane_percentage", 0)
         location = data.get("location", [0, 0, 0])
 
-        # 检查阈值跨越
         old_pct = mqtt_sensors.get(sensor_id, {}).get("methane_percentage", 0)
 
         with mqtt_sensors_lock:
@@ -79,7 +82,6 @@ def _on_methane_message(topic: str, payload: bytes):
                 "last_update": time.time()
             }
 
-        # 阈值跨越检测
         if old_pct < DANGER_THRESHOLD <= methane_pct:
             _generate_alert(sensor_id, "danger", methane_pct, location)
         elif old_pct < WARNING_THRESHOLD <= methane_pct < DANGER_THRESHOLD:
@@ -101,8 +103,6 @@ def _start_mqtt_subscriber():
         if rc == 0:
             print("[MQTT] 后端订阅者已连接")
             c.subscribe("devices/methane/+/data", 1)
-        else:
-            print(f"[MQTT] 后端订阅者连接失败: rc={rc}")
 
     def on_message(c, ud, msg):
         _on_methane_message(msg.topic, msg.payload)
@@ -117,36 +117,91 @@ def _start_mqtt_subscriber():
     if client.connect(timeout=5.0):
         client._client.loop_start()
         print("[MQTT] 后端订阅者已启动")
-    else:
-        print("[MQTT] 后端订阅者启动失败")
 
 
 _mqtt_thread = threading.Thread(target=_start_mqtt_subscriber, daemon=True)
 _mqtt_thread.start()
 
 
+# ==================== 视觉模块 WebSocket 接收 ====================
+
+@app.websocket("/ws/vision")
+async def ws_vision(websocket: WebSocket):
+    """接收视觉模块推送的车辆数据"""
+    await websocket.accept()
+    print("[WebSocket] 视觉模块已连接")
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                payload = json.loads(data)
+                vehicle_list = payload.get("vehicles", [])
+
+                with vehicles_lock:
+                    for v in vehicle_list:
+                        vid = v.get("id")
+                        if vid is not None:
+                            vehicles[vid] = v
+
+                # 广播给所有前端客户端
+                with frontend_clients_lock:
+                    dead_clients = set()
+                    for client in frontend_clients:
+                        try:
+                            await client.send_json({"vehicles": vehicle_list})
+                        except Exception:
+                            dead_clients.add(client)
+                    for dead in dead_clients:
+                        frontend_clients.discard(dead)
+
+            except json.JSONDecodeError:
+                print(f"[WebSocket] 解析视觉数据失败: {data[:100]}")
+
+    except Exception as e:
+        print(f"[WebSocket] 视觉模块连接异常: {e}")
+    finally:
+        print("[WebSocket] 视觉模块已断开")
+
+
+# ==================== 前端 WebSocket 端点 ====================
+
+@app.websocket("/ws")
+async def ws_frontend(websocket: WebSocket):
+    """前端 WebSocket 客户端连接"""
+    await websocket.accept()
+    print("[WebSocket] 前端客户端已连接")
+    with frontend_clients_lock:
+        frontend_clients.add(websocket)
+    try:
+        while True:
+            # 保持连接，不主动关闭
+            await websocket.receive_text()
+    except Exception:
+        pass
+    finally:
+        with frontend_clients_lock:
+            frontend_clients.discard(websocket)
+        print("[WebSocket] 前端客户端已断开")
+
+
 # ==================== REST API ====================
 
 @app.get("/api/vehicles")
 async def get_vehicles():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, plate FROM vehicles")
-    rows = cursor.fetchall()
-    conn.close()
-    return JSONResponse({"vehicles": [{"id": r[0], "plate": r[1]} for r in rows]})
+    """获取所有车辆数据（来自视觉模块）"""
+    with vehicles_lock:
+        vehicle_list = list(vehicles.values())
+    return JSONResponse({"vehicles": vehicle_list})
 
 
 @app.get("/api/vehicles/{vehicle_id}")
 async def get_vehicle(vehicle_id: int):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, plate FROM vehicles WHERE id = ?", (vehicle_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        return JSONResponse({"id": row[0], "plate": row[1]})
-    return JSONResponse({"error": "Vehicle not found"}, status_code=404)
+    with vehicles_lock:
+        vehicle = vehicles.get(vehicle_id)
+    if vehicle is None:
+        return JSONResponse({"error": "Vehicle not found"}, status_code=404)
+    return JSONResponse(vehicle)
 
 
 @app.get("/api/methane")
@@ -171,31 +226,6 @@ async def get_alerts():
     """获取告警列表"""
     with alerts_lock:
         return JSONResponse({"alerts": list(alerts)})
-
-
-@app.websocket("/ws")
-async def ws_endpoint(websocket: WebSocket):
-    await websocket.accept()
-
-    while True:
-        try:
-            for v in vehicles:
-                v.update()
-
-            data = {
-                "objects": [
-                    {
-                        "id": v.id,
-                        "type": "vehicle",
-                        "position": [round(v.x, 2), 0.0, round(v.z, 2)]
-                    }
-                    for v in vehicles
-                ]
-            }
-            await websocket.send_json(data)
-            await asyncio.sleep(0.1)
-        except WebSocketDisconnect:
-            break
 
 
 if __name__ == "__main__":
