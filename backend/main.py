@@ -1,13 +1,21 @@
+import json
+import random
+import time
+import threading
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-import json
-import time
-import threading
 
 from mqtt_client import MQTTClient
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _start_random_publisher()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,7 +45,54 @@ DANGER_THRESHOLD = 70.0
 frontend_clients: set[WebSocket] = set()
 frontend_clients_lock = threading.Lock()
 
+# ==================== MQTT 发布者（供 OLED 等设备订阅）====================
+_mqtt_publisher: MQTTClient | None = None
+_mqtt_publisher_lock = threading.Lock()
 
+
+def _get_mqtt_publisher() -> MQTTClient:
+    global _mqtt_publisher
+    with _mqtt_publisher_lock:
+        if _mqtt_publisher is None:
+            _mqtt_publisher = MQTTClient(
+                client_id=f"backend_publisher_{int(time.time())}",
+                host="localhost",
+                port=1883
+            )
+            _mqtt_publisher.connect(timeout=3.0)
+    return _mqtt_publisher
+
+
+# ==================== 随机 MQTT 发布（测试用）====================
+def _start_random_publisher():
+    """后台线程：每 3~8 秒随机发布车辆指令"""
+    def run():
+        while True:
+            try:
+                publisher = _get_mqtt_publisher()
+                vehicle_id = random.randint(0, 2)
+                command = random.choice([0, 0, 1, 1, 2])  # 0=左转, 1=右转, 2=停车
+                direction_map = {0: "左转", 1: "右转", 2: "停车"}
+                direction = direction_map[command]
+
+                payload = {
+                    "vehicle_id": vehicle_id,
+                    "command": str(command),
+                    "timestamp": time.time()
+                }
+                publisher.publish("vehicle/command", payload, qos=1)
+                print(f"[MQTT 发布] 车辆 #{vehicle_id} {direction} (command={command})")
+            except Exception as e:
+                print(f"[MQTT 发布失败] {e}")
+
+            time.sleep(random.uniform(3.0, 8.0))
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    print("[MQTT] 随机发布者已启动（测试用）")
+
+
+# ==================== 告警相关 ====================
 def _generate_alert(sensor_id: int, level: str, methane_pct: float, location: list):
     """生成告警"""
     current_time = time.time()
@@ -226,6 +281,22 @@ async def get_alerts():
     """获取告警列表"""
     with alerts_lock:
         return JSONResponse({"alerts": list(alerts)})
+
+
+@app.post("/api/vehicle/{vehicle_id}/command")
+async def send_vehicle_command(vehicle_id: int, command: int):
+    """
+    向车辆发送指令（通过 MQTT 发布，供 OLED 等设备订阅）
+    command: 0=左转, 1=右转, 2=停车
+    """
+    publisher = _get_mqtt_publisher()
+    payload = {
+        "vehicle_id": vehicle_id,
+        "command": str(command),
+        "timestamp": time.time()
+    }
+    publisher.publish("vehicle/command", payload, qos=1)
+    return JSONResponse({"status": "ok", "vehicle_id": vehicle_id, "command": command})
 
 
 if __name__ == "__main__":
