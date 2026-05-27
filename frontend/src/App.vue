@@ -33,7 +33,6 @@
       <AlertPanel
         :alerts="alerts"
         :sensors="methaneSensors"
-        @refresh="loadMethaneSensors"
       />
     </main>
   </div>
@@ -44,7 +43,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import StatsPanel from './components/StatsPanel.vue'
 import MapView from './components/MapView.vue'
 import AlertPanel from './components/AlertPanel.vue'
-import { fetchMethaneSensors } from './api.js'
+import { fetchMethaneSensors, fetchAlerts } from './api.js'
 
 const isOnline = ref(true)
 const currentTime = ref('')
@@ -57,6 +56,7 @@ const alerts = ref([])
 
 let ws = null
 let timeInterval = null
+let pollInterval = null
 let reconnectAttempts = 0
 const MAX_RECONNECT_ATTEMPTS = 5
 
@@ -90,19 +90,6 @@ function connectWebSocket() {
         type: obj.type || 'vehicle'
       }))
       vehicleCount.value = vehicles.value.length
-      if (data.alerts) {
-        alerts.value = data.alerts.map(a => ({
-          id: a.id,
-          type: a.level,
-          message: a.message,
-          location: `${a.location[0]}, ${a.location[2]}`,
-          time: a.time
-        }))
-        alertCount.value = alerts.value.filter(a => a.type === 'danger').length
-      }
-      if (data.methane) {
-        methaneSensors.value = data.methane
-      }
     } catch (error) {
       console.error('解析消息失败:', error)
     }
@@ -133,6 +120,26 @@ async function loadMethaneSensors() {
   }
 }
 
+async function loadAlerts() {
+  try {
+    const data = await fetchAlerts()
+    alerts.value = (data.alerts || []).map(a => ({
+      id: a.id,
+      type: a.level,
+      message: a.message,
+      location: `${a.location[0]}, ${a.location[2]}`,
+      time: a.time
+    }))
+    alertCount.value = alerts.value.filter(a => a.type === 'danger').length
+  } catch (error) {
+    console.error('加载告警失败:', error)
+  }
+}
+
+async function pollData() {
+  await Promise.all([loadMethaneSensors(), loadAlerts()])
+}
+
 function handleVehicleClick(vehicle) {
   console.log('点击车辆:', vehicle)
 }
@@ -146,11 +153,13 @@ onMounted(() => {
   timeInterval = setInterval(updateTime, 1000)
 
   connectWebSocket()
-  loadMethaneSensors()
+  pollData()
+  pollInterval = setInterval(pollData, 1000)
 })
 
 onUnmounted(() => {
   if (timeInterval) clearInterval(timeInterval)
+  if (pollInterval) clearInterval(pollInterval)
   if (ws) ws.close()
 })
 </script>

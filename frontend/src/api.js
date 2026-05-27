@@ -46,3 +46,7 @@ export async function updateMethaneSensor(sensorId) {
     method: 'POST'
   });
 }
+
+export async function fetchAlerts() {
+  return requestWithTimeout(`${API_BASE}/api/alerts`);
+}
