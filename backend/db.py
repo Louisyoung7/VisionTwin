@@ -74,6 +74,29 @@ def get_vehicle_score(vehicle_id: int) -> int | None:
     return row[0] if row else None
 
 
+def ensure_vehicle(vehicle_id: int, plate: str = None) -> int:
+    """确保车辆存在，不存在则创建（积分=100），返回积分"""
+    if plate is None:
+        plate = f"V{vehicle_id:04d}"
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO vehicles (id, plate, score) VALUES (?, ?, 100)", (vehicle_id, plate))
+    cursor.execute("SELECT score FROM vehicles WHERE id = ?", (vehicle_id,))
+    score = cursor.fetchone()[0]
+    conn.commit()
+    conn.close()
+    return score
+
+
+def delete_vehicle(vehicle_id: int):
+    """删除车辆记录"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM vehicles WHERE id = ?", (vehicle_id,))
+    conn.commit()
+    conn.close()
+
+
 def close_connection(conn):
     """Close database connection."""
     if conn:
