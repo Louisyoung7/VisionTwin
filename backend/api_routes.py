@@ -1,8 +1,7 @@
 """
 REST API 端点
 """
-import time
-from fastapi import APIRouter, WebSocket
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from db import update_vehicle_score, get_vehicle_score, ensure_vehicle

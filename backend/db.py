@@ -95,9 +95,3 @@ def delete_vehicle(vehicle_id: int):
     cursor.execute("DELETE FROM vehicles WHERE id = ?", (vehicle_id,))
     conn.commit()
     conn.close()
-
-
-def close_connection(conn):
-    """Close database connection."""
-    if conn:
-        conn.close()

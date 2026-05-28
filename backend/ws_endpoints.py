@@ -1,7 +1,6 @@
 """
 WebSocket 端点 - 视觉模块数据接收 + 前端实时推送
 """
-import asyncio
 import json
 import threading
 import time
