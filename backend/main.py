@@ -1,3 +1,4 @@
+import asyncio
 import json
 import random
 import time
@@ -8,6 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from mqtt_client import MQTTClient
+from db import update_vehicle_score, get_vehicle_score
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -64,24 +66,27 @@ def _get_mqtt_publisher() -> MQTTClient:
 
 
 # ==================== 随机 MQTT 发布（测试用）====================
+NUM_DEVICES = 5  # 下位机数量
+
 def _start_random_publisher():
-    """后台线程：每 3~8 秒随机发布车辆指令"""
+    """后台线程：每 3~8 秒随机向 5 个下位机发布指令"""
     def run():
         while True:
             try:
                 publisher = _get_mqtt_publisher()
-                vehicle_id = random.randint(0, 2)
+                device_id = random.randint(0, NUM_DEVICES - 1)
                 command = random.choice([0, 0, 1, 1, 2])  # 0=左转, 1=右转, 2=停车
                 direction_map = {0: "左转", 1: "右转", 2: "停车"}
                 direction = direction_map[command]
 
                 payload = {
-                    "vehicle_id": vehicle_id,
+                    "device_id": device_id,
                     "command": str(command),
                     "timestamp": time.time()
                 }
-                publisher.publish("vehicle/command", payload, qos=1)
-                print(f"[MQTT 发布] 车辆 #{vehicle_id} {direction} (command={command})")
+                topic = f"device/{device_id}/command"
+                publisher.publish(topic, payload, qos=1)
+                print(f"[MQTT 发布] 设备 #{device_id} {direction} (command={command}) → {topic}")
             except Exception as e:
                 print(f"[MQTT 发布失败] {e}")
 
@@ -89,7 +94,7 @@ def _start_random_publisher():
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
-    print("[MQTT] 随机发布者已启动（测试用）")
+    print(f"[MQTT] 随机发布者已启动，共 {NUM_DEVICES} 个下位机")
 
 
 # ==================== 告警相关 ====================
@@ -283,20 +288,81 @@ async def get_alerts():
         return JSONResponse({"alerts": list(alerts)})
 
 
-@app.post("/api/vehicle/{vehicle_id}/command")
-async def send_vehicle_command(vehicle_id: int, command: int):
+@app.post("/api/device/{device_id}/command")
+async def send_device_command(device_id: int, command: int):
     """
-    向车辆发送指令（通过 MQTT 发布，供 OLED 等设备订阅）
+    向指定下位机发送指令（通过 MQTT 发布）
+    device_id: 0 ~ 4
     command: 0=左转, 1=右转, 2=停车
     """
+    if not (0 <= device_id < NUM_DEVICES):
+        return JSONResponse({"error": f"device_id must be 0 ~ {NUM_DEVICES - 1}"}, status_code=400)
+
     publisher = _get_mqtt_publisher()
+    direction_map = {0: "左转", 1: "右转", 2: "停车"}
+    direction = direction_map.get(command, "未知")
     payload = {
-        "vehicle_id": vehicle_id,
+        "device_id": device_id,
         "command": str(command),
         "timestamp": time.time()
     }
-    publisher.publish("vehicle/command", payload, qos=1)
-    return JSONResponse({"status": "ok", "vehicle_id": vehicle_id, "command": command})
+    topic = f"device/{device_id}/command"
+    publisher.publish(topic, payload, qos=1)
+    return JSONResponse({"status": "ok", "device_id": device_id, "command": command, "direction": direction, "topic": topic})
+
+
+@app.post("/api/vehicle/{vehicle_id}/route-feedback")
+async def vehicle_route_feedback(vehicle_id: int, followed: bool):
+    """
+    视觉模块反馈车辆是否按规划路线行驶
+    followed=True: 按路线行驶，不扣分
+    followed=False: 未按路线行驶，扣1分
+    """
+    new_score = update_vehicle_score(vehicle_id, followed)
+    if new_score is None:
+        return JSONResponse({"error": "Vehicle not found"}, status_code=404)
+
+    if not followed:
+        _broadcast_score_event(vehicle_id, new_score)
+
+    return JSONResponse({
+        "vehicle_id": vehicle_id,
+        "followed": followed,
+        "score": new_score
+    })
+
+
+def _broadcast_score_event(vehicle_id: int, score: int):
+    """通过 WebSocket 向所有前端客户端广播积分变更事件（ET 模式）"""
+    event = {
+        "type": "score_change",
+        "vehicle_id": vehicle_id,
+        "score": score
+    }
+    asyncio.create_task(_send_to_all_frontends(event))
+    print(f"[WebSocket 广播] 车辆 #{vehicle_id} 积分变化 → {score}")
+
+
+async def _send_to_all_frontends(event: dict):
+    """向所有前端 WebSocket 客户端发送事件"""
+    with frontend_clients_lock:
+        dead_clients = set()
+        for client in frontend_clients:
+            try:
+                await client.send_json(event)
+            except Exception:
+                dead_clients.add(client)
+        for dead in dead_clients:
+            frontend_clients.discard(dead)
+
+
+@app.get("/api/vehicle/{vehicle_id}/score")
+async def get_vehicle_score_api(vehicle_id: int):
+    """获取车辆积分"""
+    score = get_vehicle_score(vehicle_id)
+    if score is None:
+        return JSONResponse({"error": "Vehicle not found"}, status_code=404)
+    return JSONResponse({"vehicle_id": vehicle_id, "score": score})
 
 
 if __name__ == "__main__":

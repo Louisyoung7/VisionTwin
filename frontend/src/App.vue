@@ -16,6 +16,16 @@
       </div>
     </header>
 
+    <div class="notification-area">
+      <div
+        v-for="n in notifications"
+        :key="n.id"
+        class="notification score-notification"
+      >
+        🚗 车辆 #{{ n.vehicleId }} 未按路线行驶，积分 {{ n.score }}
+      </div>
+    </div>
+
     <main class="dashboard">
       <StatsPanel
         :vehicleCount="vehicleCount"
@@ -53,6 +63,7 @@ const alertCount = ref(0)
 const vehicles = ref([])
 const methaneSensors = ref([])
 const alerts = ref([])
+const notifications = ref([])
 
 let ws = null
 let timeInterval = null
@@ -84,6 +95,10 @@ function connectWebSocket() {
   ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data)
+      if (data.type === 'score_change') {
+        showScoreNotification(data.vehicle_id, data.score)
+        return
+      }
       if (data.vehicles) {
         vehicles.value = data.vehicles
         vehicleCount.value = vehicles.value.length
@@ -104,6 +119,14 @@ function connectWebSocket() {
       setTimeout(connectWebSocket, reconnectAttempts * 3000)
     }
   }
+}
+
+function showScoreNotification(vehicleId, score) {
+  const id = Date.now()
+  notifications.value.push({ id, vehicleId, score })
+  setTimeout(() => {
+    notifications.value = notifications.value.filter(n => n.id !== id)
+  }, 4000)
 }
 
 async function loadMethaneSensors() {
@@ -157,3 +180,32 @@ onUnmounted(() => {
   if (ws) ws.close()
 })
 </script>
+
+<style scoped>
+.notification-area {
+  position: fixed;
+  top: 80px;
+  right: 20px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.score-notification {
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  color: #856404;
+  padding: 10px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+</style>
