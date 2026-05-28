@@ -4,10 +4,6 @@
 
     <div class="map-overlay">
       <div class="overlay-item">
-        <span class="overlay-label">监控点位</span>
-        <span class="overlay-value">{{ cameraCount }}</span>
-      </div>
-      <div class="overlay-item">
         <span class="overlay-label">在线车辆</span>
         <span class="overlay-value">{{ vehicles.length }}</span>
       </div>
@@ -44,11 +40,8 @@ const props = defineProps({
 const emit = defineEmits(['vehicle-click', 'sensor-click'])
 
 const mapContainerRef = ref(null)
-const cameraCount = ref(5)
 const alertCount = ref(0)
 const selectedVehicle = ref(null)
-
-const BOUNDS = 12
 
 const vehicleMarkers = new Map()
 const sensorMarkers = new Map()
@@ -81,8 +74,6 @@ function initMap() {
   container.appendChild(markerLayer)
   markerContainer.value = markerLayer
 
-  addCameraMarkers(markerLayer)
-
   floorPlan.onload = () => {
     updateVehicleMarkers()
     updateSensorMarkers()
@@ -91,31 +82,6 @@ function initMap() {
   floorPlan.onerror = () => {
     console.warn('楼层平面图加载失败')
   }
-}
-
-function addCameraMarkers(container) {
-  const positions = [
-    { x: -4, z: -4, name: '东门入口' },
-    { x: 4, z: -4, name: '西门入口' },
-    { x: -4, z: 4, name: '食堂入口' },
-    { x: 4, z: 4, name: '宿舍区入口' },
-    { x: 0, z: 0, name: '中心路口' }
-  ]
-
-  positions.forEach(pos => {
-    const pos_pixel = getMarkerPosition(pos.x, pos.z)
-    const marker = document.createElement('div')
-    marker.style.cssText = `
-      position: absolute; left: ${pos_pixel.left}px; top: ${pos_pixel.top}px;
-      width: 24px; height: 24px; background: #3b82f6; border-radius: 50%;
-      border: 2px solid white; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-      pointer-events: auto;
-    `
-    marker.title = pos.name
-    container.appendChild(marker)
-  })
-
-  cameraCount.value = positions.length
 }
 
 function getMarkerPosition(x, z) {
@@ -127,23 +93,33 @@ function getMarkerPosition(x, z) {
   const displayWidth = containerWidth * 0.96
   const displayHeight = containerHeight * 0.96
 
-  const floorPlanRatio = 502 / 633
+  // SVG viewBox="0 0 502 636"，世界坐标系 BOUNDS=12 → [-6, +6]
+  // 世界 X 轴：-6=left, +6=right
+  // 世界 Z 轴：-6=top(north), +6=bottom(south)，SVG Y轴朝下（Z小→Y小）无需翻转
+  const SVG_WIDTH = 502
+  const SVG_HEIGHT = 636
+  const floorPlanRatio = SVG_WIDTH / SVG_HEIGHT
   const containerRatio = displayWidth / displayHeight
 
   let scaleX, scaleY, offsetX, offsetY
 
+  const WORLD_SCALE = 12  // 世界坐标系范围 [-6, +6]
+
   if (containerRatio > floorPlanRatio) {
-    scaleY = displayHeight / 12
+    // 容器更宽，Y方向填满，X方向letterbox
+    scaleY = displayHeight / WORLD_SCALE
     scaleX = scaleY * floorPlanRatio
-    offsetX = (displayWidth - scaleX * 12) / 2
+    offsetX = (displayWidth - scaleX * WORLD_SCALE) / 2
     offsetY = 0
   } else {
-    scaleX = displayWidth / 12
+    // 容器更高，X方向填满，Y方向letterbox
+    scaleX = displayWidth / WORLD_SCALE
     scaleY = scaleX / floorPlanRatio
     offsetX = 0
-    offsetY = (displayHeight - scaleY * 12) / 2
+    offsetY = (displayHeight - scaleY * WORLD_SCALE) / 2
   }
 
+  // 世界(-6,-6)→SVG(0,0)，世界(0,0)→SVG中心，世界(+6,+6)→SVG(SVG_WIDTH,SVG_HEIGHT)
   return {
     left: offsetX + (x + 6) * scaleX,
     top: offsetY + (z + 6) * scaleY
