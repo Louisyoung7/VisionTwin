@@ -8,9 +8,11 @@ import threading
 from mqtt_client import MQTTClient
 
 
-NUM_DEVICES = 5
+NUM_DEVICES = 4
+DEVICE_IDS = ["A", "B", "C", "D"]
 WARNING_THRESHOLD = 40.0
 DANGER_THRESHOLD = 70.0
+DIRECTION_MAP = {1: "左转", 2: "右转", 3: "直行"}  # 1=左转, 2=右转, 3=直行，仅供日志显示
 _mqtt_publisher: MQTTClient | None = None
 _mqtt_publisher_lock = threading.Lock()
 mqtt_sensors: dict[int, dict] = {}
@@ -88,24 +90,20 @@ def _start_mqtt_subscriber():
 
 
 def _start_random_publisher():
-    """后台线程：每 3~8 秒随机向 5 个下位机发布指令"""
+    """后台线程：每 3~8 秒随机向 4 个下位机发布指令"""
     def run():
         while True:
             try:
                 publisher = _get_mqtt_publisher()
-                device_id = random.randint(0, NUM_DEVICES - 1)
-                command = random.choice([0, 0, 1, 1, 2])
-                direction_map = {0: "左转", 1: "右转", 2: "停车"}
-                direction = direction_map[command]
+                idx = random.randint(0, NUM_DEVICES - 1)
+                device_id = DEVICE_IDS[idx]
+                command = random.choice([1, 1, 2, 2, 3])
+                direction = DIRECTION_MAP[command]
 
-                payload = {
-                    "device_id": device_id,
-                    "command": str(command),
-                    "timestamp": time.time()
-                }
-                topic = f"device/{device_id}/command"
+                payload = {device_id: str(command)}
+                topic = f"device/A{device_id}/command"
                 publisher.publish(topic, payload, qos=1)
-                print(f"[MQTT 发布] 设备 #{device_id} {direction} (command={command}) → {topic}")
+                print(f"[MQTT 发布] 设备 {device_id} {direction} (command={command}) → {topic}")
             except Exception as e:
                 print(f"[MQTT 发布失败] {e}")
 
@@ -116,16 +114,11 @@ def _start_random_publisher():
     print(f"[MQTT] 随机发布者已启动，共 {NUM_DEVICES} 个下位机")
 
 
-def publish_device_command(device_id: int, command: int):
+def publish_device_command(device_id: str, command: int):
     """供 API 调用，向指定下位机发送指令"""
-    direction_map = {0: "左转", 1: "右转", 2: "停车"}
-    direction = direction_map.get(command, "未知")
+    direction = DIRECTION_MAP.get(command, "未知")
     publisher = _get_mqtt_publisher()
-    payload = {
-        "device_id": device_id,
-        "command": str(command),
-        "timestamp": time.time()
-    }
+    payload = {device_id: str(command)}
     topic = f"device/{device_id}/command"
     publisher.publish(topic, payload, qos=1)
     return direction, topic

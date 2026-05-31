@@ -5,7 +5,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from db import update_vehicle_score, get_vehicle_score, ensure_vehicle
-from mqtt_broker import publish_device_command, mqtt_sensors, mqtt_sensors_lock, NUM_DEVICES
+from mqtt_broker import publish_device_command, mqtt_sensors, mqtt_sensors_lock, NUM_DEVICES, DEVICE_IDS
 from alerts import alerts, alerts_lock
 from ws_endpoints import vehicles, vehicles_lock, broadcast_score_change
 
@@ -51,9 +51,9 @@ async def get_alerts():
 
 
 @router.post("/device/{device_id}/command")
-async def send_device_command_api(device_id: int, command: int):
-    if not (0 <= device_id < NUM_DEVICES):
-        return JSONResponse({"error": f"device_id must be 0 ~ {NUM_DEVICES - 1}"}, status_code=400)
+async def send_device_command_api(device_id: str, command: int):
+    if device_id not in DEVICE_IDS:
+        return JSONResponse({"error": f"device_id must be one of {DEVICE_IDS}"}, status_code=400)
     direction, topic = publish_device_command(device_id, command)
     return JSONResponse({"status": "ok", "device_id": device_id, "command": command, "direction": direction, "topic": topic})
 
