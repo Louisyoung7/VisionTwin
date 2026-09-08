@@ -52,6 +52,53 @@
       </div>
     </div>
 
+    <div class="panel-header">
+      <h2>行驶车辆</h2>
+    </div>
+    <div class="vehicle-table-container">
+      <table v-if="vehicles.length > 0" class="vehicle-table">
+        <thead>
+          <tr>
+            <th>车牌号</th>
+            <th>积分</th>
+            <th>路线ID</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="v in vehicles" :key="v.plate">
+            <td class="plate-cell">{{ v.plate }}</td>
+            <td>
+              <span
+                class="score-cell"
+                :class="v.score >= 80 ? 'high' : v.score < 60 ? 'low' : ''"
+              >{{ v.score !== undefined ? v.score : '-' }}</span>
+            </td>
+            <td class="route-cell">{{ v.route_id || '-' }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else class="empty-tip">暂无行驶车辆</div>
+    </div>
+
+    <div class="panel-header">
+      <h2>停靠车辆</h2>
+    </div>
+    <div class="vehicle-table-container">
+      <table v-if="dockedVehicles.length > 0" class="vehicle-table">
+        <thead>
+          <tr>
+            <th>车牌号</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="v in dockedVehicles" :key="v.id">
+            <td class="plate-cell">{{ v.plate }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else class="empty-tip">暂无停靠车辆</div>
+    </div>
+
   </aside>
 </template>
 
@@ -62,6 +109,14 @@ defineProps({
     default: () => []
   },
   sensors: {
+    type: Array,
+    default: () => []
+  },
+  vehicles: {
+    type: Array,
+    default: () => []
+  },
+  dockedVehicles: {
     type: Array,
     default: () => []
   }

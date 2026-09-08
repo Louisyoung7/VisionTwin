@@ -1,21 +1,31 @@
-import json
-import random
-import time
-import threading
+"""
+VisionTwin 后端服务入口
+"""
+import os
+import argparse
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
-from mqtt_client import MQTTClient
+from ws_endpoints import ws_vision, ws_frontend
+from api_routes import router as api_router
+from mqtt_broker import start as mqtt_start
+from db import init_db
+from alerts import ALERT_SAVE_DIR
+from config import SERVER_HOST, SERVER_PORT
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _start_random_publisher()
+    init_db()
+    if not getattr(app.state, "skip_mqtt", False):
+        mqtt_start()
     yield
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(title="VisionTwin", lifespan=lifespan)
+app.state.skip_mqtt = False
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,280 +35,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ==================== 车辆数据（来自视觉模块 WebSocket）====================
-vehicles: dict[int, dict] = {}
-vehicles_lock = threading.Lock()
+app.include_router(api_router, prefix="/api")
+app.websocket("/ws/vision")(ws_vision)
+app.websocket("/ws")(ws_frontend)
 
-# ==================== 甲烷传感器数据（来自 MQTT）====================
-mqtt_sensors: dict[int, dict] = {}
-mqtt_sensors_lock = threading.Lock()
-
-# ==================== 告警相关 ====================
-alerts: list[dict] = []
-alerts_lock = threading.Lock()
-ALERT_COOLDOWN = 10
-_last_alert_time: dict[int, float] = {}
-WARNING_THRESHOLD = 40.0
-DANGER_THRESHOLD = 70.0
-
-# ==================== 前端 WebSocket 客户端 ====================
-frontend_clients: set[WebSocket] = set()
-frontend_clients_lock = threading.Lock()
-
-# ==================== MQTT 发布者（供 OLED 等设备订阅）====================
-_mqtt_publisher: MQTTClient | None = None
-_mqtt_publisher_lock = threading.Lock()
-
-
-def _get_mqtt_publisher() -> MQTTClient:
-    global _mqtt_publisher
-    with _mqtt_publisher_lock:
-        if _mqtt_publisher is None:
-            _mqtt_publisher = MQTTClient(
-                client_id=f"backend_publisher_{int(time.time())}",
-                host="localhost",
-                port=1883
-            )
-            _mqtt_publisher.connect(timeout=3.0)
-    return _mqtt_publisher
-
-
-# ==================== 随机 MQTT 发布（测试用）====================
-def _start_random_publisher():
-    """后台线程：每 3~8 秒随机发布车辆指令"""
-    def run():
-        while True:
-            try:
-                publisher = _get_mqtt_publisher()
-                vehicle_id = random.randint(0, 2)
-                command = random.choice([0, 0, 1, 1, 2])  # 0=左转, 1=右转, 2=停车
-                direction_map = {0: "左转", 1: "右转", 2: "停车"}
-                direction = direction_map[command]
-
-                payload = {
-                    "vehicle_id": vehicle_id,
-                    "command": str(command),
-                    "timestamp": time.time()
-                }
-                publisher.publish("vehicle/command", payload, qos=1)
-                print(f"[MQTT 发布] 车辆 #{vehicle_id} {direction} (command={command})")
-            except Exception as e:
-                print(f"[MQTT 发布失败] {e}")
-
-            time.sleep(random.uniform(3.0, 8.0))
-
-    thread = threading.Thread(target=run, daemon=True)
-    thread.start()
-    print("[MQTT] 随机发布者已启动（测试用）")
-
-
-# ==================== 告警相关 ====================
-def _generate_alert(sensor_id: int, level: str, methane_pct: float, location: list):
-    """生成告警"""
-    current_time = time.time()
-    if current_time - _last_alert_time.get(sensor_id, 0) < ALERT_COOLDOWN:
-        return None
-
-    _last_alert_time[sensor_id] = current_time
-    alert = {
-        "id": int(current_time * 1000) + sensor_id,
-        "sensor_id": sensor_id,
-        "level": level,
-        "methane_percentage": round(methane_pct, 2),
-        "location": location,
-        "message": f"甲烷浓度{'危险告警' if level == 'danger' else '预警'}：传感器 #{sensor_id} 检测到 {methane_pct:.1f}%",
-        "time": time.strftime("%H:%M:%S")
-    }
-    with alerts_lock:
-        alerts.insert(0, alert)
-        if len(alerts) > 50:
-            alerts[:] = alerts[:50]
-    return alert
-
-
-def _on_methane_message(topic: str, payload: bytes):
-    """MQTT 消息回调 - 处理甲烷传感器数据"""
-    try:
-        data = json.loads(payload.decode("utf-8"))
-        sensor_id = data.get("id")
-        if sensor_id is None:
-            return
-
-        methane_pct = data.get("methane_percentage", 0)
-        location = data.get("location", [0, 0, 0])
-
-        old_pct = mqtt_sensors.get(sensor_id, {}).get("methane_percentage", 0)
-
-        with mqtt_sensors_lock:
-            mqtt_sensors[sensor_id] = {
-                "id": sensor_id,
-                "location": location,
-                "methane_percentage": round(methane_pct, 2),
-                "last_update": time.time()
-            }
-
-        if old_pct < DANGER_THRESHOLD <= methane_pct:
-            _generate_alert(sensor_id, "danger", methane_pct, location)
-        elif old_pct < WARNING_THRESHOLD <= methane_pct < DANGER_THRESHOLD:
-            _generate_alert(sensor_id, "warning", methane_pct, location)
-
-    except Exception as e:
-        print(f"[MQTT] 解析甲烷数据失败: {e}")
-
-
-# ==================== MQTT 订阅（后台线程）====================
-def _start_mqtt_subscriber():
-    client = MQTTClient(
-        client_id=f"backend_subscriber_{int(time.time())}",
-        host="localhost",
-        port=1883
-    )
-
-    def on_connect(c, ud, flags, rc):
-        if rc == 0:
-            print("[MQTT] 后端订阅者已连接")
-            c.subscribe("devices/methane/+/data", 1)
-
-    def on_message(c, ud, msg):
-        _on_methane_message(msg.topic, msg.payload)
-
-    def on_disconnect(c, ud, rc):
-        print(f"[MQTT] 后端订阅者断开连接: rc={rc}")
-
-    client._client.on_connect = on_connect
-    client._client.on_message = on_message
-    client._client.on_disconnect = on_disconnect
-
-    if client.connect(timeout=5.0):
-        client._client.loop_start()
-        print("[MQTT] 后端订阅者已启动")
-
-
-_mqtt_thread = threading.Thread(target=_start_mqtt_subscriber, daemon=True)
-_mqtt_thread.start()
-
-
-# ==================== 视觉模块 WebSocket 接收 ====================
-
-@app.websocket("/ws/vision")
-async def ws_vision(websocket: WebSocket):
-    """接收视觉模块推送的车辆数据"""
-    await websocket.accept()
-    print("[WebSocket] 视觉模块已连接")
-
-    try:
-        while True:
-            data = await websocket.receive_text()
-            try:
-                payload = json.loads(data)
-                vehicle_list = payload.get("vehicles", [])
-
-                with vehicles_lock:
-                    for v in vehicle_list:
-                        vid = v.get("id")
-                        if vid is not None:
-                            vehicles[vid] = v
-
-                # 广播给所有前端客户端
-                with frontend_clients_lock:
-                    dead_clients = set()
-                    for client in frontend_clients:
-                        try:
-                            await client.send_json({"vehicles": vehicle_list})
-                        except Exception:
-                            dead_clients.add(client)
-                    for dead in dead_clients:
-                        frontend_clients.discard(dead)
-
-            except json.JSONDecodeError:
-                print(f"[WebSocket] 解析视觉数据失败: {data[:100]}")
-
-    except Exception as e:
-        print(f"[WebSocket] 视觉模块连接异常: {e}")
-    finally:
-        print("[WebSocket] 视觉模块已断开")
-
-
-# ==================== 前端 WebSocket 端点 ====================
-
-@app.websocket("/ws")
-async def ws_frontend(websocket: WebSocket):
-    """前端 WebSocket 客户端连接"""
-    await websocket.accept()
-    print("[WebSocket] 前端客户端已连接")
-    with frontend_clients_lock:
-        frontend_clients.add(websocket)
-    try:
-        while True:
-            # 保持连接，不主动关闭
-            await websocket.receive_text()
-    except Exception:
-        pass
-    finally:
-        with frontend_clients_lock:
-            frontend_clients.discard(websocket)
-        print("[WebSocket] 前端客户端已断开")
-
-
-# ==================== REST API ====================
-
-@app.get("/api/vehicles")
-async def get_vehicles():
-    """获取所有车辆数据（来自视觉模块）"""
-    with vehicles_lock:
-        vehicle_list = list(vehicles.values())
-    return JSONResponse({"vehicles": vehicle_list})
-
-
-@app.get("/api/vehicles/{vehicle_id}")
-async def get_vehicle(vehicle_id: int):
-    with vehicles_lock:
-        vehicle = vehicles.get(vehicle_id)
-    if vehicle is None:
-        return JSONResponse({"error": "Vehicle not found"}, status_code=404)
-    return JSONResponse(vehicle)
-
-
-@app.get("/api/methane")
-async def get_methane():
-    """获取所有甲烷传感器数据（来自 MQTT）"""
-    with mqtt_sensors_lock:
-        sensor_list = list(mqtt_sensors.values())
-    return JSONResponse({"methane": sensor_list})
-
-
-@app.get("/api/methane/{sensor_id}")
-async def get_methane_sensor(sensor_id: int):
-    with mqtt_sensors_lock:
-        sensor = mqtt_sensors.get(sensor_id)
-    if sensor is None:
-        return JSONResponse({"error": "Sensor not found"}, status_code=404)
-    return JSONResponse(sensor)
-
-
-@app.get("/api/alerts")
-async def get_alerts():
-    """获取告警列表"""
-    with alerts_lock:
-        return JSONResponse({"alerts": list(alerts)})
-
-
-@app.post("/api/vehicle/{vehicle_id}/command")
-async def send_vehicle_command(vehicle_id: int, command: int):
-    """
-    向车辆发送指令（通过 MQTT 发布，供 OLED 等设备订阅）
-    command: 0=左转, 1=右转, 2=停车
-    """
-    publisher = _get_mqtt_publisher()
-    payload = {
-        "vehicle_id": vehicle_id,
-        "command": str(command),
-        "timestamp": time.time()
-    }
-    publisher.publish("vehicle/command", payload, qos=1)
-    return JSONResponse({"status": "ok", "vehicle_id": vehicle_id, "command": command})
+# 静态文件：坑洼截图
+os.makedirs(ALERT_SAVE_DIR, exist_ok=True)
+app.mount("/alerts", StaticFiles(directory=ALERT_SAVE_DIR), name="alerts")
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="VisionTwin 后端服务")
+    parser.add_argument("--no-mqtt", action="store_true", help="禁用 MQTT 功能")
+    args = parser.parse_args()
+
+    if args.no_mqtt:
+        app.state.skip_mqtt = True
+        print("MQTT 功能已禁用")
+
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=SERVER_HOST, port=SERVER_PORT, log_level="error")

@@ -1,5 +1,6 @@
 // REST API 请求（甲烷传感器、车辆）
-const API_BASE = 'http://127.0.0.1:8000';
+// 开发环境通过 vite 代理到后端
+const API_BASE = '';
 
 const DEFAULT_TIMEOUT = 10000;
 
@@ -49,4 +50,47 @@ export async function updateMethaneSensor(sensorId) {
 
 export async function fetchAlerts() {
   return requestWithTimeout(`${API_BASE}/api/alerts`);
+}
+
+export async function fetchDockedVehicles() {
+  return requestWithTimeout(`${API_BASE}/api/vehicles/docked`);
+}
+
+export async function fetchVehicleScore(plate) {
+  return requestWithTimeout(`${API_BASE}/api/vehicles/${plate}/score`);
+}
+
+// ===== 历史数据 =====
+
+export async function fetchHistoryAlerts(params = {}) {
+  const queryParts = [`hours=${params.hours || 24}`];
+  if (params.source) queryParts.push(`source=${params.source}`);
+  if (params.level) queryParts.push(`level=${params.level}`);
+  return requestWithTimeout(`${API_BASE}/api/history/alerts?${queryParts.join('&')}`);
+}
+
+export async function fetchHistoryMethane(params = {}) {
+  const queryParts = [`hours=${params.hours || 24}`];
+  if (params.sensor_id) queryParts.push(`sensor_id=${params.sensor_id}`);
+  return requestWithTimeout(`${API_BASE}/api/history/methane?${queryParts.join('&')}`);
+}
+
+export async function fetchHistoryScore(params = {}) {
+  const queryParts = [`hours=${params.hours || 24}`];
+  if (params.plate) queryParts.push(`plate=${params.plate}`);
+  return requestWithTimeout(`${API_BASE}/api/history/score?${queryParts.join('&')}`);
+}
+
+export async function fetchHistoryStats(params = {}) {
+  const query = new URLSearchParams({
+    hours: params.hours || 24
+  }).toString();
+  return requestWithTimeout(`${API_BASE}/api/history/stats?${query}`);
+}
+
+export async function fetchHistoryPothole(params = {}) {
+  const query = new URLSearchParams({
+    hours: params.hours || 24
+  }).toString();
+  return requestWithTimeout(`${API_BASE}/api/history/pothole?${query}`);
 }
